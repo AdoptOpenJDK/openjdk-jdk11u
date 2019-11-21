@@ -29,7 +29,10 @@
 #include "sunfontids.h"
 #include "sun_font_FreetypeFontScaler.h"
 
-#include<stdlib.h>
+#include <stdlib.h>
+#if !defined(_WIN32) && !defined(__APPLE_)
+#include <dlfcn.h>
+#endif
 #include <math.h>
 #include "ft2build.h"
 #include FT_FREETYPE_H
@@ -38,6 +41,8 @@
 #include FT_SIZES_H
 #include FT_OUTLINE_H
 #include FT_SYNTHESIS_H
+#include FT_LCD_FILTER_H
+#include FT_MODULE_H
 
 #include "fontscaler.h"
 
@@ -246,6 +251,52 @@ static unsigned long ReadTTFontFileFunc(FT_Stream stream,
     }
 }
 
+typedef FT_Error (*FT_Prop_Set_Func)(FT_Library library,
+                                     const FT_String*  module_name,
+                                     const FT_String*  property_name,
+                                     const void*       value );
+
+/**
+ * Prefer the older v35 freetype byte code interpreter.
+ */
+static void setInterpreterVersion(FT_Library library) {
+
+    char* props = getenv("FREETYPE_PROPERTIES");
+    int version = 35;
+    const char* module = "truetype";
+    const char* property = "interpreter-version";
+
+    /* If some one is setting this, don't override it */
+    if (props != NULL && strstr(property, props)) {
+        return;
+    }
+    /*
+     * FT_Property_Set was introduced in 2.4.11.
+     * Some older supported Linux OSes may not include it so look
+     * this up dynamically.
+     * And if its not available it doesn't matter, since the reason
+     * we need it dates from 2.7.
+     * On Windows & Mac the library is always bundled so it is safe
+     * to use directly in those cases.
+     */
+#if defined(_WIN32) || defined(__APPLE__)
+    FT_Property_Set(library, module, property, (void*)(&version));
+#else
+    void *lib = dlopen("libfreetype.so", RTLD_LOCAL|RTLD_LAZY);
+    if (lib == NULL) {
+        lib = dlopen("libfreetype.so.6", RTLD_LOCAL|RTLD_LAZY);
+        if (lib == NULL) {
+            return;
+        }
+    }
+    FT_Prop_Set_Func func = (FT_Prop_Set_Func)dlsym(lib, "FT_Property_Set");
+    if (func != NULL) {
+        func(library, module, property, (void*)(&version));
+    }
+    dlclose(lib);
+#endif
+}
+
 /*
  * Class:     sun_font_FreetypeFontScaler
  * Method:    initNativeScaler
@@ -285,6 +336,7 @@ Java_sun_font_FreetypeFontScaler_initNativeScaler(
         free(scalerInfo);
         return 0;
     }
+    setInterpreterVersion(scalerInfo->library);
 
 #define TYPE1_FROM_JAVA        2
 
@@ -439,6 +491,8 @@ static int setupFTContext(JNIEnv *env,
         if (errCode == 0) {
             errCode = FT_Activate_Size(scalerInfo->face->size);
         }
+
+        FT_Library_SetLcdFilter(scalerInfo->library, FT_LCD_FILTER_DEFAULT);
     }
 
     return errCode;
@@ -621,10 +675,14 @@ Java_sun_font_FreetypeFontScaler_getGlyphMetricsNative(
                                  pScalerContext, pScaler, glyphCode);
      info = (GlyphInfo*) jlong_to_ptr(image);
 
-     (*env)->SetFloatField(env, metrics, sunFontIDs.xFID, info->advanceX);
-     (*env)->SetFloatField(env, metrics, sunFontIDs.yFID, info->advanceY);
-
-     free(info);
+     if (info != NULL) {
+         (*env)->SetFloatField(env, metrics, sunFontIDs.xFID, info->advanceX);
+         (*env)->SetFloatField(env, metrics, sunFontIDs.yFID, info->advanceY);
+         free(info);
+     } else {
+         (*env)->SetFloatField(env, metrics, sunFontIDs.xFID, 0.0f);
+         (*env)->SetFloatField(env, metrics, sunFontIDs.yFID, 0.0f);
+     }
 }
 
 
