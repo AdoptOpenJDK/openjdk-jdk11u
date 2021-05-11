@@ -1008,6 +1008,13 @@ define SetupNativeCompilationBody
               $(CD) $$($1_OUTPUT_DIR) && \
                   $$($1_OBJCOPY) --add-gnu-debuglink=$$($1_DEBUGINFO_FILES) $$($1_TARGET)
 
+        else ifeq ($(OPENJDK_TARGET_OS), aix)
+          # AIX does not provide the equivalent of OBJCOPY to extract debug symbols,
+          # so we copy the compiled object with symbols to the .debuginfo file, which
+          # happens prior to the STRIP_CMD on the original target object file.
+          $1_DEBUGINFO_FILES := $$($1_OUTPUT_DIR)/$$($1_NOSUFFIX).debuginfo 
+          $1_CREATE_DEBUGINFO_CMDS := $(CP) $$($1_TARGET) $$($1_DEBUGINFO_FILES)
+
         else ifeq ($(OPENJDK_TARGET_OS), macosx)
           $1_DEBUGINFO_FILES := \
               $$($1_OUTPUT_DIR)/$$($1_BASENAME).dSYM/Contents/Info.plist \
